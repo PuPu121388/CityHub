@@ -88,23 +88,50 @@ CityHub 是一个类"大众点评"的本地生活服务平台，提供商家信�
 
 ## 快速开始
 
-### 环境要求
+> **依赖一键起**：MySQL / Redis / RocketMQ 三个中间件全部由 `docker-compose.yml` 拉起，**本机无需安装任何一个**。
+> 下面是跑通的最短路径；完整分步教程（镜像加速、配置原理、排错表、运维命令）见 **[`DOCKER_QUICKSTART.md`](DOCKER_QUICKSTART.md)**。
 
-| 组件 | 版本 | 说明 |
-|---|---|---|
-| JDK | 17+（仓库用 21 验证） | Lombok 需 ≥ 1.18.30 才支持 JDK 21 |
-| Maven | 3.x | 可直接使用 IDEA 内置 Maven |
-| MySQL | 8.x | 库名 `dingping`，脚本见 `src/main/resources/db/hmdp.sql` |
-| Redis | 6+ | 若设了密码，需同步到配置 |
-| RocketMQ | 4.x / 5.x | NameServer `127.0.0.1:9876` |
+### 前置条件
+
+| 依赖 | 要求 |
+|---|---|
+| **Docker Desktop** | 已安装并处于运行状态 |
+| **JDK** | 17 及以上（仓库用 JDK 21 实测通过；Lombok 需 ≥ 1.18.30） |
+| **Maven** | 3.6+（或直接使用 IDEA 内置 Maven） |
 
 ### 启动步骤
 
-1. 启动 RocketMQ NameServer + Broker（端口 9876 / 10911）。
-2. 启动 MySQL、Redis。
-3. 执行 `src/main/resources/db/hmdp.sql` 初始化数据库。
-4. 修改 `src/main/resources/application.yaml` 中的数据库 / Redis / RocketMQ 连接信息。
-5. 运行 `com.hmdp.HmDianPingApplication`，访问 `http://localhost:8081`。
+```bash
+# 1. 启动全部依赖容器（首次拉镜像约 1~3 分钟，之后几秒）
+#    新版 Docker Desktop 为插件形式，命令是 `docker compose up -d`（中间空格）
+docker-compose up -d
+
+# 2. 等依赖就绪：MySQL / Redis 显示 (healthy)，Broker 出现 boot success
+docker-compose ps
+docker logs cityhub-rmq-broker 2>&1 | grep "boot success"
+
+# 3. 首次导入表结构与初始数据（数据卷持久化，只需一次，之后无需重复）
+docker exec -i cityhub-mysql mysql -uroot -p123456 dingping < src/main/resources/db/hmdp.sql
+
+# 4. 启动应用
+mvn spring-boot:run
+```
+
+访问 `http://localhost:8081/shop/1`，返回 `{"success":true,...}` 即表示项目已跑通。
+
+### 端口与账号
+
+| 服务 | 地址 | 说明 |
+|---|---|---|
+| 应用 | `http://localhost:8081` | 纯后端 API（项目不含前端页面） |
+| MySQL | `127.0.0.1:`**`13306`** | 特意避开本机可能已占用的 3306，两者可并存 |
+| Redis | `127.0.0.1:6379` | 已开启 AOF 持久化 |
+| RocketMQ | `127.0.0.1:9876` / `10911` | NameServer / Broker |
+
+所有账号密码统一为 `123456`，已与 `src/main/resources/application.yaml` 对齐，**克隆后无需改动任何配置**。
+
+> 🔧 **国内网络拉不动镜像？** 为 Docker Engine 配置 `registry-mirrors`，或先从镜像站 `docker pull` 再打回原 tag，
+> 具体步骤见 `DOCKER_QUICKSTART.md` §3.2「配置镜像加速」。
 
 ---
 
@@ -236,7 +263,29 @@ public Result seckillVoucher(@PathVariable("id") Long voucherId) { ... }
 - **缓存保护**：穿透 / 击穿均有兜底，热点 key 失效不击穿 DB。
 - **限流防护**：刷券、爬虫等异常流量在入口被滑动窗口拦截，防止系统过载。
 
-> 说明：仓库不内置压测脚本与性能数据。若要量化"优化效果"，建议配合 JMeter 对本机秒杀接口做并发压测，对比 MySQL 直连与 Redis+Lua 两版的吞吐 / RT 数据。
+### 实测数据
+
+用自研 Node 压测脚本对秒杀接口做过一轮并发验证：**1000 个用户抢 100 库存**，
+压测端采用 **200 在途并发 + keep-alive 连接复用**。
+
+| 指标 | 实测结果 |
+|---|---|
+| 成功响应 / DB 落库订单 | 100 / 100（完全一致，**无超卖**） |
+| 重复下单用户 | **0** |
+| 抢购瞬间 Redis 最低库存 | **0**（恰好扣完，不多扣不少扣） |
+| 端到端耗时（1000 个请求） | 679 ms |
+| 吞吐 | **1472 req/s** |
+| P50 / P95 / P99 RT | 114 / 238 / 304 ms |
+
+> **测试环境**：Windows 单机，压测端、应用、MySQL、Redis、RocketMQ 共用同一块 CPU，
+> 压测端本身也是单进程 Node。因此这组数字是**本机联调环境下的下限，不代表生产容量**；
+> 真正有意义的是**正确性结论** —— 1000 次请求打进来，Redis 恰好扣完 100 个库存，
+> DB 恰好落 100 单，无超卖、无重复下单。
+
+> **一个值得记录的踩坑**：压测端最初写成"一次性开 1000 条 TCP 短连接"，
+> 跑出 P50 ≈ 12 s。排查后发现请求根本没进业务逻辑，而是卡在 **Tomcat 默认 200 个工作线程的排队**上 ——
+> 测到的是**排队时间**而不是**处理时间**。改为有界并发 + 连接复用后数据才回归正常。
+> 结论：**压测端模型本身会严重污染结论**，报数字前先确认自己测的是处理能力还是排队。
 
 ---
 

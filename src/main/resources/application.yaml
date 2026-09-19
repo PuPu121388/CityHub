@@ -5,14 +5,15 @@ spring:
     name: hmdp
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/dingping?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    # 端口 13306：Docker 里的 MySQL 映射到宿主的 13306，避开本机已装的 MySQL(3306)
+    url: jdbc:mysql://127.0.0.1:13306/dingping?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
     username: root
-    password: 290390
+    password: 123456
   data:
     redis:
       host: 127.0.0.1
       port: 6379
-      password: 9b09b97b22181283
+      password: 123456
       lettuce:
         pool:
           max-active: 30
