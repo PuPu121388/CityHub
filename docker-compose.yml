@@ -1,0 +1,103 @@
+# CityHub 一键依赖编排：MySQL + Redis + RocketMQ
+#
+# 用法（需先启动 Docker Desktop）：
+#   docker-compose up -d          # 首次会拉取镜像，之后秒起
+#   docker-compose ps             # 看状态，等 mysql 变 healthy
+#   docker-compose stop           # 停止（保留数据）
+#   docker-compose down           # 移除容器（保留数据卷）
+#   docker-compose down -v        # 连数据一起清空（慎用）
+#
+# 端口说明：
+#   MySQL  宿主机 13306 -> 容器 3306   （避开本机已装的 MySQL 3306）
+#   Redis  宿主机 6379  -> 容器 6379
+#   RocketMQ NameServer 9876 / Broker 10911
+
+name: cityhub-main
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: cityhub-mysql
+    ports:
+      - "13306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: dingping
+      # 时区必须对齐宿主机：tb_voucher_order.create_time 等字段用 DEFAULT CURRENT_TIMESTAMP 填充，
+      # 而 OrderTimeoutTask 拿的是应用进程的 LocalDateTime.now()（宿主机本地时间）。
+      # 容器默认 UTC 会让 DB 时间比应用时间慢 8 小时 → 订单"一出生就超时" →
+      # 兜底关单任务下一个 30 秒 tick 就把它关掉，超时窗口从 1 分钟变成 30 秒。
+      TZ: Asia/Shanghai
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-time-zone=+08:00
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-p123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.0
+    container_name: cityhub-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass 123456 --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.1.4
+    container_name: cityhub-rmq-namesrv
+    ports:
+      - "9876:9876"
+    environment:
+      # 官方镜像默认堆是 8G，必须调小，否则宿主机内存被吃满
+      JAVA_OPT_EXT: "-server -Xms256m -Xmx256m -Xmn128m"
+    command: sh mqnamesrv
+    restart: unless-stopped
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.1.4
+    container_name: cityhub-rmq-broker
+    # 官方镜像以 uid=3000(rocketmq) 运行，但镜像里并不存在 /home/rocketmq/store 目录，
+    # 命名卷挂载后会由 Docker 创建成 root:root，rocketmq 用户写不进去 → Broker 启动失败。
+    # 这里改为 root 运行（仅本地开发依赖容器，无外网暴露），换取 store 可持久化。
+    user: root
+    ports:
+      - "10911:10911"
+      - "10909:10909"
+    environment:
+      NAMESRV_ADDR: "rocketmq-namesrv:9876"
+      # -XX:-UseContainerSupport 必须加：官方镜像自带 Temurin JDK 8u372，该版本把
+      # jdk.internal.platform(cgroup v2)反向移植进了 JDK8，在 Docker Desktop/WSL2 下
+      # CgroupV2Subsystem.getInstance() 会 NPE，导致 StoreUtil 静态初始化失败，
+      # Broker 每次处理 PULL_MESSAGE 都抛异常 → 消息永远消费不到（落库失败）。
+      JAVA_OPT_EXT: "-server -Xms512m -Xmx512m -Xmn256m -XX:-UseContainerSupport"
+    command: >
+      sh mqbroker
+      -n rocketmq-namesrv:9876
+      -c /home/rocketmq/rocketmq-5.1.4/conf/broker.conf
+    volumes:
+      - ./broker.conf:/home/rocketmq/rocketmq-5.1.4/conf/broker.conf
+      # 持久化 Broker 存储：否则容器重建后 topic、消费进度、堆积消息全部丢失
+      - rmq-broker-store:/home/rocketmq/store
+    depends_on:
+      - rocketmq-namesrv
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+  rmq-broker-store:
