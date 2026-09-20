@@ -150,12 +150,19 @@ docker-compose version   # 有输出 → 用 `docker-compose`
 在项目根目录（`docker-compose.yml` 所在目录）执行：
 
 ```bash
-docker-compose up -d
+docker-compose up -d --wait
 ```
+
+> ⚠️ **`--wait` 不要省略。**
+>
+> | 命令 | 行为 |
+> |---|---|
+> | `docker-compose up -d` | **立刻返回**，此时 MySQL 往往还在初始化 → 应用紧接着启动会**连不上数据库、启动失败** |
+> | `docker-compose up -d --wait` | **阻塞到所有服务真正就绪（`healthy`）才返回**（约 5~10 秒）→ 返回后可直接启动应用 ✅ |
 
 首次执行会拉取镜像 + 初始化，通常需要 **1~3 分钟**（取决于网络）；之后再启动只需几秒。
 
-查看状态：
+查看状态（`--wait` 返回后通常已经全绿，此步可选）：
 
 ```bash
 docker-compose ps
@@ -171,8 +178,8 @@ cityhub-rmq-broker    Up
 cityhub-rmq-namesrv   Up
 ```
 
-> ⏳ **`cityhub-mysql` 第一次启动可能要 30~60 秒才变 `healthy`**（要初始化数据目录），
-> 等到 `healthy` 再往下走，否则应用连不上数据库。
+> ⏳ **`cityhub-mysql` 第一次启动可能要 30~60 秒才变 `healthy`**（要初始化数据目录）。
+> 用了 `--wait` 就不必自己盯着——命令返回时它已经就绪了。
 
 **确认 RocketMQ Broker 启动成功**：
 
@@ -448,6 +455,7 @@ docker exec cityhub-rmq-broker sh -c \
 | 容器都 Up，但应用报 **Redis 连接失败** | 密码不一致 | `application.yaml` 的 `spring.data.redis.password` 必须是 `123456` |
 | 应用启动报 **RocketMQ 连接超时** | Broker 没起来，或 `brokerIP1` 不对 | `docker logs cityhub-rmq-broker \| findstr "boot success"`；确认 `broker.conf` 里是 `brokerIP1 = 127.0.0.1` |
 | 应用报 `Access denied for user 'root'` | 数据库连错端口 | 确认 `application.yaml` 的 URL 里是 **13306** 而不是 3306 |
+| **应用启动报 `Communications link failure` / 连不上 MySQL** | 容器还没就绪就启动了应用（用了 `up -d` 而不是 `up -d --wait`） | 改用 `docker-compose up -d --wait`，等命令返回后再启动应用 |
 | **秒杀返回成功，但 `tb_voucher_order` 一直没数据** | 消费者拉取消息时 Broker 抛异常（本机为 cgroup v2 兼容性 Bug） | 确认 broker 的 `JAVA_OPT_EXT` 里有 `-XX:-UseContainerSupport`，然后 `docker-compose up -d rocketmq-broker` 重建 |
 | 秒杀返回 `-1` / 库存不足 | Redis 里没有库存预热 | 重新创建一张券，建券时会自动预热；或检查 Redis 是否连得上 |
 | 秒杀返回 401 | token 过期 | token 有效期 30 分钟，重新登录即可 |
@@ -485,10 +493,10 @@ docker-compose down -v
 ```bash
 # 0. 前提：Docker Desktop 已启动，已配置镜像加速
 
-# 1. 启动全部依赖（首次 1~3 分钟）
-docker-compose up -d
+# 1. 启动全部依赖并等待就绪（首次 1~3 分钟；--wait 会阻塞到 healthy 才返回）
+docker-compose up -d --wait
 
-# 2. 等 mysql / redis 变 healthy
+# 2. 确认状态（可选；--wait 返回时已全部就绪）
 docker-compose ps
 
 # 3. 确认 RocketMQ Broker 就绪

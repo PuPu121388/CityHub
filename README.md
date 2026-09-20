@@ -103,10 +103,11 @@ CityHub 是一个类"大众点评"的本地生活服务平台，提供商家信�
 
 ```bash
 # 1. 启动全部依赖容器（首次拉镜像约 1~3 分钟，之后几秒）
-#    新版 Docker Desktop 为插件形式，命令是 `docker compose up -d`（中间空格）
-docker-compose up -d
+#    新版 Docker Desktop 为插件形式，命令是 `docker compose up -d --wait`（中间空格）
+#    --wait 会阻塞到 MySQL/Redis 变 healthy 才返回，避免应用抢跑连不上库
+docker-compose up -d --wait
 
-# 2. 等依赖就绪：MySQL / Redis 显示 (healthy)，Broker 出现 boot success
+# 2. 确认状态（--wait 返回后通常已全部就绪，此步可选）
 docker-compose ps
 docker logs cityhub-rmq-broker 2>&1 | grep "boot success"
 
