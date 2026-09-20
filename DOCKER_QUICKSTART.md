@@ -252,9 +252,22 @@ Started HmDianPingApplication in x.xxx seconds
 > ⚠️ **如果日志里的端口不是 8081**，说明有别的程序抢占了 8081 或环境变量干扰，
 > 可以显式指定：`mvn spring-boot:run -Dspring-boot.run.jvmArguments="-Dserver.port=8081"`
 
-> ⚠️ **用了私人 `~/.m2/settings.xml` 且里面配了内网私服导致依赖下不动？**
-> 项目根目录自带了干净的 `maven-settings.xml`，可以这样指定：
-> `mvn -s .\maven-settings.xml spring-boot:run`
+> ⚠️ **依赖始终下不动，怀疑本机 `~/.m2/settings.xml` 里配了内网私服、或把中央仓库镜像屏蔽了？**
+> 临时用一份干净的配置绕过即可 —— 新建 `settings-clean.xml`，只写一个阿里云镜像：
+>
+> ```xml
+> <settings>
+>   <mirrors>
+>     <mirror>
+>       <id>aliyunmaven</id>
+>       <mirrorOf>central</mirrorOf>
+>       <url>https://maven.aliyun.com/repository/public</url>
+>     </mirror>
+>   </mirrors>
+> </settings>
+> ```
+>
+> 然后运行 `mvn -s .\settings-clean.xml spring-boot:run`。
 
 ---
 
